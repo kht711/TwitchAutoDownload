@@ -8,6 +8,7 @@ import threading
 import subprocess
 import os
 import codecs
+import configparser
 
 import websocket
 
@@ -15,7 +16,7 @@ import websocket
 dist = "twitchDownload"
 commonLogFile = "log/common.log"
 
-# Input auth token
+# Input auth token or token.ini file
 CLIENT_ID = "auth_token"
 
 
@@ -275,6 +276,20 @@ def readTwitchList():
 
 
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
+
+absTokenFile = os.path.join(os.getcwd(), "token.ini")
+if not os.path.exists(absTokenFile):
+    config = configparser.RawConfigParser()
+    config.add_section("AUTH_TOKEN")
+    config.set("AUTH_TOKEN", "token", "")
+    w = codecs.open(absTokenFile, "w", "utf-8", "strict")
+    config.write(w)
+    w.close()
+configRead = configparser.ConfigParser()
+configRead.read(absTokenFile, encoding="utf-8")
+getToken = configRead.get("AUTH_TOKEN", "token")
+if getToken != "":
+    CLIENT_ID = getToken
 
 absCommonLogFile = os.path.join(os.getcwd(), commonLogFile)
 if not os.path.exists(absCommonLogFile):
