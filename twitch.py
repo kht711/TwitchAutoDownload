@@ -100,6 +100,7 @@ class WebSocketTwitch:
                         del idDict[self.id]
                     if self.login in loginDict:
                         del loginDict[self.login]
+                    ws.close()
             else:
                 if "topic" in data:
                     topic = data["topic"]
