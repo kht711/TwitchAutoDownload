@@ -22,7 +22,7 @@ CLIENT_ID = "auth_token"
 
 headers = {
     "Content-Type": "application/json",
-    'Client-ID': CLIENT_ID
+    "Client-ID": CLIENT_ID
 }
 MAX_LOG_LINE = 1000
 TIME = 60
@@ -290,6 +290,7 @@ configRead.read(absTokenFile, encoding="utf-8")
 getToken = configRead.get("AUTH_TOKEN", "token")
 if getToken != "":
     CLIENT_ID = getToken
+    headers["Client-ID"] = CLIENT_ID
 
 absCommonLogFile = os.path.join(os.getcwd(), commonLogFile)
 if not os.path.exists(absCommonLogFile):
