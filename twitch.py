@@ -141,7 +141,7 @@ class WebSocketTwitch:
         self.writeLog("[{0}] Websocket Error! {1}".format(self.getCurrentTime(), error))
 
     def on_close(self, ws, close_status_code, close_msg):
-        if self.login not in downloadingList:
+        if self.login not in downloadIdList:
             self.writeLog("[{0}] Close! And {1} is no Reconnect".format(self.getCurrentTime(), self.login))
         else:
             self.writeLog("[{0}] Close! Reconnect...".format(self.getCurrentTime()))
