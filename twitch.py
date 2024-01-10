@@ -15,6 +15,7 @@ import websocket
 # Input Directory
 dist = "twitchDownload"
 commonLogFile = "log/common.log"
+configFile = "config"
 
 # Input auth token or token.ini file
 CLIENT_ID = "auth_token"
@@ -27,8 +28,8 @@ headers = {
 MAX_LOG_LINE = 1000
 TIME = 60
 downloadIdList = set()
-idDict = {}
-loginDict = {}
+idToLoginDict = {}
+loginToIdDict = {}
 downloadingList = {}
 
 
@@ -36,7 +37,7 @@ class WebSocketTwitch:
     def __init__(self, id):
         wssUrl = "wss://pubsub-edge.twitch.tv/"
         self.id = id
-        self.login = idDict[self.id]
+        self.login = idToLoginDict[self.id]
         self.logFile = os.path.join(os.getcwd(), dist, self.login, "{0}.log".format(self.login))
         self.ws = websocket.WebSocketApp(
             url=wssUrl,
@@ -97,43 +98,31 @@ class WebSocketTwitch:
 
                     if self.login not in downloadIdList:
                         self.writeLog("[{0}] {1} is Delete Download List!".format(self.getCurrentTime(), self.login))
-                        if self.id in idDict:
-                            del idDict[self.id]
-                        if self.login in loginDict:
-                            del loginDict[self.login]
+                        if self.id in idToLoginDict:
+                            del idToLoginDict[self.id]
+                        if self.login in loginToIdDict:
+                            del loginToIdDict[self.login]
                         ws.close()
                 elif message["type"] in ["stream-up", "viewcount"]:
                     if "topic" in data:
                         topic = data["topic"]
                         twitchId = topic.split(".")[1]
 
-                        if idDict[twitchId] not in downloadingList:
+                        if idToLoginDict[twitchId] not in downloadingList:
                             ws.close()
                             status = False
                             tryCountList = [0, 0]
-                            if message["type"] == "stream-up":
-                                time.sleep(4)
                             while True:
-                                status, obj = getLoginToId(idDict[twitchId])
-                                if obj["data"]["user"]["stream"]:
-                                    status = download(idDict[twitchId], self.logFile)
-                                    if status:
-                                        break
-                                    tryCountList[1] += 1
-                                    if tryCountList[1] >= 3:
-                                        # reconnect
-                                        thread = threading.Thread(target=connect, args=(twitchId, ))
-                                        thread.start()
-                                        break
-                                else:
-                                    tryCountList[0] += 1
-                                    self.writeLog("[{0}] {1} is Not live!".format(self.getCurrentTime(), self.login))
-                                    if tryCountList[0] >= 10:
-                                        # reconnect
-                                        thread = threading.Thread(target=connect, args=(twitchId, ))
-                                        thread.start()
-                                        break
-                                    time.sleep(0.5)
+                                downloader = Downloader(idToLoginDict[twitchId], self.logFile)
+                                status = downloader.download()
+                                if status:
+                                    break
+                                tryCountList[1] += 1
+                                if tryCountList[1] >= 3:
+                                    # reconnect
+                                    thread = threading.Thread(target=connect, args=(twitchId, ))
+                                    thread.start()
+                                    break
         except Exception:
             self.writeLog("[{0}] Error! {1}".format(self.getCurrentTime(), traceback.format_exc()))
 
@@ -159,14 +148,106 @@ class WebSocketTwitch:
         self.ws.run_forever()
 
 
+class Downloader:
+    def __init__(self, login, logFile):
+        self.login = login
+        self.url = "https://www.twitch.tv/{0}".format(login)
+        self.logFile = logFile
+        self.fileDir = os.path.dirname(self.logFile)
+        self.name = ""
+        self.title = ""
+
+        self.downloadStartLog()
+
+    def getNameAndTitle(self):
+        cmd = ["streamlink", "-j", self.url, "best"]
+        output = subprocess.run(cmd, capture_output=True, text=True).stdout
+        output = json.loads(output)
+        if "error" in output:
+            return False
+        else:
+            self.name = output["metadata"]["author"]
+            self.title = output["metadata"]["title"]
+            return True
+
+    def getCurrentTime(self):
+        dt_now = datetime.datetime.now()
+        return dt_now.strftime("%Y-%m-%d %H:%M:%S")
+
+    def getCurrentTimeFile(self):
+        dt_now = datetime.datetime.now()
+        return dt_now.strftime("%Y-%m-%dT%H%M%S")
+
+    def downloadStartLog(self):
+        lines = getLastLog(self.logFile, MAX_LOG_LINE - 2)
+        w = codecs.open(self.logFile, "w", "utf-8", "strict")
+        w.writelines(lines)
+
+        w.write("[{1}] downloading {0}...\n".format(self.login, self.getCurrentTime()))
+        w.close()
+
+    def download(self):
+        global downloadingList
+        global dist
+
+        try:
+            path = os.path.join(os.getcwd(), dist, self.login)
+            if not os.path.exists(path):
+                os.makedirs(path)
+
+            tryCount = 0
+            while True:
+                if tryCount >= 3:
+                    return False
+                status = self.getNameAndTitle()
+                if not status:
+                    tryCount += 1
+                else:
+                    break
+
+            if self.name != "" and self.title != "":
+                filename = "[live][{0}][{1}]{2}.ts".format(self.name, self.getCurrentTimeFile(), self.title)
+            else:
+                filename = "[live][{0}][{1}].ts".format(self.login, self.getCurrentTimeFile())
+            filePath = os.path.join(self.fileDir, filename)
+            if os.path.exists(configFile):
+                downloadCmdList = ["streamlink", "--config", configFile, self.url, "best", "-o", filePath]
+            else:
+                downloadCmdList = ["streamlink", self.url, "best", "-o", filePath]
+
+            pro = subprocess.Popen(downloadCmdList)
+            downloadingList[self.login] = filename
+            # reconnect
+            thread = threading.Thread(target=connect, args=(loginToIdDict[self.login], ))
+            thread.start()
+            # wait
+            pro.wait()
+            return True
+        except Exception:
+            lines = getLastLog(self.logFile, MAX_LOG_LINE - 2)
+            w = codecs.open(self.logFile, "w", "utf-8", "strict")
+            w.writelines(lines)
+
+            w.write("[{1}] download Error! {0}...\n".format(self.login, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+            w.write(traceback.format_exc())
+            w.close()
+
+            if self.login in downloadingList:
+                del downloadingList[self.login]
+            return False
+
+
+
 def getLoginToId(login):
     param = """
         query {{
             user(login: "{0}") {{
                 id
                 stream {{
-                    id
+                    type
+                    title
                 }}
+                displayName
             }}
         }}
     """
@@ -221,60 +302,6 @@ def connect(id):
     ws_client.run_forever()
 
 
-def download(user_info, logFile):
-    global downloadingList
-    global dist
-    url = "https://www.twitch.tv/{0}".format(user_info)
-
-    try:
-        lines = getLastLog(logFile, MAX_LOG_LINE - 2)
-        w = codecs.open(logFile, "w", "utf-8", "strict")
-        w.writelines(lines)
-
-        w.write("[{1}] downloading {0}...\n".format(user_info, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        w.close()
-
-        path = os.path.join(os.getcwd(), dist, user_info)
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        filename = ""
-        try:
-            filename = subprocess.check_output(["yt-dlp", url, "--print", "%(filename)s"], text=True, stderr=subprocess.STDOUT)
-            filename = filename.strip().replace(" ", "_")
-        except subprocess.CalledProcessError as e:
-            if "live" in e.output:
-                lines = getLastLog(logFile, MAX_LOG_LINE - 2)
-                w = codecs.open(logFile, "w", "utf-8", "strict")
-                w.writelines(lines)
-
-                w.write("[{1}] {0} download Fail! Retry...\n".format(user_info, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-                w.close()
-                return False
-
-        downloadCmdList = ["yt-dlp", url, "--abort-on-unavailable-fragment", "--cookies-from-browser", "chromium", "-P", path]
-        if filename != "":
-            downloadCmdList.append("-o")
-            downloadCmdList.append(filename)
-        pro = subprocess.Popen(downloadCmdList)
-        downloadingList[user_info] = filename
-        # reconnect
-        thread = threading.Thread(target=connect, args=(loginDict[user_info], ))
-        thread.start()
-        # wait
-        pro.wait()
-        return True
-    except Exception:
-        lines = getLastLog(logFile, MAX_LOG_LINE - 2)
-        w = codecs.open(logFile, "w", "utf-8", "strict")
-        w.writelines(lines)
-
-        w.write("[{1}] download Error! {0}...\n".format(user_info, datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        w.write(traceback.format_exc())
-        w.close()
-        return True
-
-
 def readTwitchList():
     global downloadIdList
     while True:
@@ -306,8 +333,8 @@ def readTwitchList():
                         w.close()
                     else:
                         twitchId = obj["data"]["user"]["id"]
-                        idDict[twitchId] = login
-                        loginDict[login] = twitchId
+                        idToLoginDict[twitchId] = login
+                        loginToIdDict[login] = twitchId
                         thread = threading.Thread(target=connect, args=(twitchId, ))
                         thread.start()
                     break
@@ -322,14 +349,14 @@ os.chdir(os.path.dirname(os.path.abspath(__file__)))
 absTokenFile = os.path.join(os.getcwd(), "token.ini")
 if not os.path.exists(absTokenFile):
     config = configparser.RawConfigParser()
-    config.add_section("AUTH_TOKEN")
-    config.set("AUTH_TOKEN", "token", "")
+    config.add_section("GQL_AUTH_TOKEN")
+    config.set("GQL_AUTH_TOKEN", "token", "")
     w = codecs.open(absTokenFile, "w", "utf-8", "strict")
     config.write(w)
     w.close()
 configRead = configparser.ConfigParser()
 configRead.read(absTokenFile, encoding="utf-8")
-getToken = configRead.get("AUTH_TOKEN", "token")
+getToken = configRead.get("GQL_AUTH_TOKEN", "token")
 if getToken != "":
     CLIENT_ID = getToken
     headers["Client-ID"] = CLIENT_ID
